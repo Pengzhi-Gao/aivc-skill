@@ -35,7 +35,7 @@ AIVC 把这些问题变成流程里的固定检查项：先路由后端，再检
 Skill 是纯文档 + 流程规则，不含模型代码和权重。把仓库放到 skills 目录即可：
 
 ```bash
-git clone <repo-url> ~/.workbuddy-ai/skills/aivc
+git clone https://github.com/Pengzhi-Gao/aivc-skill.git ~/.workbuddy-ai/skills/aivc
 ```
 
 各后端的解释器、权重路径和安装障碍见 [`references/backend-environments.md`](references/backend-environments.md)。不同后端的环境相互隔离，不要混用——例如 CellOracle 锁定 `numpy==1.26.4` / `pandas<=1.5.3`，装不进带新版 scanpy 的主环境。
