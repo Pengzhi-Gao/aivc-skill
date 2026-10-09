@@ -1,0 +1,25 @@
+# 数据与运行产物不入库
+data/
+results/
+*.h5ad
+*.parquet
+*.pkl
+*.npz
+*.pt
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
