@@ -31,6 +31,8 @@ import scanpy as sc
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 import celloracle as co
 
 ROOT = Path(__file__).resolve().parent
@@ -202,6 +204,8 @@ for gene in TARGETS:
             emb = pd.DataFrame({
                 'cell': oracle.adata.obs_names,
                 'cluster': cell_tissue.reindex(oracle.adata.obs_names).to_numpy(),
+                'umap_x': np.asarray(oracle.embedding)[:, 0],
+                'umap_y': np.asarray(oracle.embedding)[:, 1],
                 'embedding_shift_magnitude': shift_mag,
                 'random_shift_magnitude': random_mag,
                 'specific_shift_magnitude': spec_mag,
@@ -223,12 +227,31 @@ for gene in TARGETS:
                             .agg(['count', 'mean', 'median']).reset_index()
             by_cluster.to_csv(TAB / f'{tag}_shift_by_cluster.csv', index=False)
 
-            # 图：向量场 + 位移
-            fig, ax = plt.subplots(figsize=(6.4, 5.4), dpi=140)
-            oracle.plot_quiver(ax=ax)
-            ax.set_title(f'CellOracle: {gene} {"knockout" if mode == "ko" else "overexpression"} '
-                         f'(set to {value:g})')
-            fig.tight_layout()
+            # 图：向量场。按组织来源给细胞和箭头分别上色，否则所有箭头同色、
+            # 看不出哪一群细胞位移更大，图就没有信息量。
+            umap = np.asarray(oracle.embedding)
+            clus = cell_tissue.reindex(oracle.adata.obs_names).to_numpy()
+            uniq = sorted(pd.unique(clus))
+            palette = plt.get_cmap('tab20')
+            cmap = {c: palette(i % 20) for i, c in enumerate(uniq)}
+            arrow_colors = np.array([cmap[c] for c in clus])
+
+            fig, ax = plt.subplots(figsize=(8.6, 6.2), dpi=140)
+            ax.scatter(umap[:, 0], umap[:, 1], c='#dcdfe3', s=6, linewidths=0)
+            for c in uniq:
+                m = clus == c
+                ax.scatter(umap[m, 0], umap[m, 1], s=9, color=cmap[c],
+                           linewidths=0, label=f'{c} (n={int(m.sum())})')
+            ax.quiver(umap[:, 0], umap[:, 1], shift[:, 0], shift[:, 1],
+                      scale=30, headaxislength=7, headlength=11, headwidth=8,
+                      linewidths=0.25, width=0.0045, edgecolors='k',
+                      color=arrow_colors, alpha=1)
+            ax.axis('off')
+            ax.set_title(f'CellOracle：{gene} {"敲除" if mode == "ko" else "过表达"}后的细胞状态位移')
+            ax.legend(fontsize=7.5, loc='center left', bbox_to_anchor=(1.01, 0.5),
+                      frameon=False, markerscale=2.0, handletextpad=0.3,
+                      labelspacing=0.4, title='组织来源', title_fontsize=8)
+            fig.tight_layout(rect=(0, 0, 0.79, 1))
             fig.savefig(FIG / f'{tag}_quiver.png')
             plt.close(fig)
 
