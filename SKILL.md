@@ -54,6 +54,7 @@ metadata:
 - OE：优先 CellOracle；只有存在匹配 CRISPRa/OE 训练数据时才使用 GEARS；Geneformer 的 `overexpress` 仅交付 embedding 变化，不交付真实表达倍数。
 - 药筛：先确认后端是否接受用户自己的表达矩阵。接受用户基线的（PRnet、chemCPA）可以用"单细胞矩阵 + 药物库"直接跑；不接受外部基线的（UniPert-G2CP）只能用其自带细胞系的对照。DrugReflector 仅用于其原生排名/类别输出。
 - 药筛结果必须过退化检查：药物之间没有区分度时标 `failed`，不能把退化排名当结果交付。
+- 药筛要做疾病方向比较时，先过基因空间、表达平台和实验条件三道对齐（见 `references/downstream-results.md` 的「逆转评分」）。对不齐就不算逆转分数，只报模型原生分数。
 - 不使用 scTenifoldKnk。
 - ORBIT 只能作为 pathway/program 分析后端，不冒充单基因 KO/OE。
 - BulkFormer 不作为化合物扰动后端。

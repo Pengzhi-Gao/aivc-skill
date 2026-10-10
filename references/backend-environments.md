@@ -124,5 +124,6 @@ PRnet 的模型是 `forward(control, condition_label, noise)`，条件标签是 
 - 推理入口照 `official_reproduce/G2CP/run_scripts/inference_unseen_a549_local.py` 的写法：`PertData` → `prepare_split('pretrain-finetune-ts')` → `GEARS` → `load_pretrained` → `new_predict(化合物名列表, 表征字典)`。
 - **不接受外部基线矩阵**：`new_predict` 用 `self.adata[condition=='ctrl']` 作对照，每次随机抽 300 个细胞（无种子接口）。A549 的 ctrl 只有 9 个细胞，实际是重复抽样。
 - 没有剂量维度，一个化合物就是一个条件。
-- 基因空间 978 个 landmark 基因。
-- 单次参考耗时：2333 个化合物约 7 分钟（GPU）。
+- 基因空间 978 个 landmark 基因，输出为 gene symbol。与 Ensembl 体系的疾病参照比较前先做 ID 映射。
+- 单次参考耗时：2333 个化合物 7~18 分钟（GPU，视机器负载；瓶颈在逐化合物循环，GPU 利用率只有 8%~44%，不是显存问题）。
+- 对照细胞抽样不可复现：A549 的 ctrl 只有 9 个细胞，`new_predict` 每次随机抽 300 个且没有种子接口。同一批化合物两次运行的预测会有差异，跨运行比较分数前先确认这一点，不要把运行间差异当成药物间差异。

@@ -64,8 +64,10 @@
 - 任务：化合物（UniPert 统一表征）→ 978 landmark 基因的表达效应
 - 输入：化合物名称 + 256 维 UniPert 表征；**不接受外部基线矩阵，也没有剂量维度**
 - 细胞背景：固定在训练 checkpoint 对应的细胞系（当前本地只有 A549）
-- 输出：978 基因的预测表达；响应 = 预测 − 模型自带对照细胞均值
+- 输出：978 基因的预测表达（gene symbol）；响应 = 预测 − 模型自带对照细胞均值
 - 限制：`new_predict` 每次随机抽 300 个对照细胞且无随机种子接口；本机只有 A549 权重
+- 训练未见判定：UniPert 能编码任意合法 SMILES，但这只说明扰动编码层通用，不代表该化合物在 G2CP 训练中出现过。严格判定要用训练词表对 canonical SMILES 做差集，并先归一盐形式和立体异构体
+- 疾病方向比较：输出为 gene symbol 的 landmark 空间，与 Ensembl 体系的疾病参照直接取交集前必须先映射；映射率或交集过小时不计算逆转分数
 - 工作区入口：`D:/WorkBuddy/Work_推送/2610/261003 UniPert-G2CP`，UniPert 编码用 `official_unipert`，G2CP 推理用 `official_reproduce/G2CP/run_scripts/inference_unseen_a549_local.py` 的写法
 
 ## DrugReflector
