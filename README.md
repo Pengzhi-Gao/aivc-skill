@@ -55,9 +55,22 @@ results/<run_id>/
   errors.jsonl         # 逐条件失败记录
   raw/                 # 后端原始输出
   tables/              # 标准化表
-  figures/             # 图
+  figures/             # 图与 figure_manifest.csv
   report.md            # 只写运行事实，不写机制结论
 ```
+
+## 结果展示
+
+执行时按实际数据生成互补图组，用户也可以指定只画某张图：
+
+- **虚拟敲除**：有方向的基因响应图、响应热图和适用的通路富集；有状态位移时，补充细胞群背景、随机化对照与位移分布；有网络或轨迹数据时再增加网络图和扰动评分。
+- **虚拟过表达**：基因响应、热图和适用的富集，加目标表达设定展示；有明确目标状态时增加状态接近程度，有匹配敲除结果时作 KO/OE 并排比较。仅 embedding 后端使用距离分布和候选排名。
+- **虚拟药筛**：有效候选排名、评分分布、可用的药物响应热图和退化检查；按数据补充疾病逆转、跨细胞背景评分热图与剂量响应曲线。
+- **实测验证**：有匹配真实扰动数据时，展示预测对实测散点图、基因表达对照和方向/误差评价；与纯预测图分开。
+
+每张图保存对应数值表、绘图参数和生成状态。没有合适数据时记录跳过原因；不为单份预测补造 p 值、误差条、存活率或 IC50。详细生成条件、坐标定义、展示检查和文献示例见 [`references/downstream-results.md`](references/downstream-results.md)。
+
+上述内容是后续执行的出图规则；仓库历史示例仍以实际保存的图为准，未补画的扩展图不计为已完成。
 
 ## 结果状态
 
@@ -92,7 +105,7 @@ results/<run_id>/
 | `references/input-contracts.md` | 输入字段、缺口处理、疾病参照的构造要求 |
 | `references/model-capabilities.md` | 各后端的实际能力、限制和路由依据 |
 | `references/backend-environments.md` | 解释器、权重、先验、已知安装障碍、调用要点 |
-| `references/downstream-results.md` | 三类任务的结果表、图和下游计算口径 |
+| `references/downstream-results.md` | 三类任务的默认图组、条件扩展、统计口径、图形源表与展示验收 |
 | `references/execution-playbook.md` | 四阶段执行、结果目录、错误处理和交付格式 |
 
 ## 边界

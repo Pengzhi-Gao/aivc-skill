@@ -1,7 +1,8 @@
 ---
 name: aivc
 description: 面向单细胞和 bulk 转录组的虚拟基因敲除、虚拟基因过表达与虚拟药物筛选流程 skill。当用户希望用已有数据运行虚拟干预、预测药物转录响应、生成逐基因/网络/embedding 结果、绘图或整理运行产物时使用。Skill 负责任务路由、输入检查、后端适配、推理、结果标准化和文件交付；不替用户判断疾病机制、疗效、因果关系或靶点。
-agent_created: true
+metadata:
+  agent_created: true
 ---
 
 # AIVC：虚拟干预流程
@@ -75,6 +76,15 @@ agent_created: true
 
 ### 5. 生成下游结果
 
+读取 `references/downstream-results.md`，按实际输出类型选择默认图组。用户未指定单张图时，主动生成数据支持的互补视图，不以一张 Top 基因图或无说明的箭头图结束：
+
+- KO：有方向的基因响应图、响应热图及适用的通路富集；有状态位移时补细胞群背景、扰动/随机化对照和位移分布。
+- OE：沿用适用的 KO 图组，增加目标表达设定展示；有明确目标状态时计算状态接近程度，有匹配 KO 时可作并排比较。
+- 药筛：通过质量检查的候选排名、评分分布及可用的逐药响应热图；按输入补疾病特征逆转、跨细胞背景评分热图和剂量响应曲线。
+- 只有 embedding 或原生排名的后端，使用相应状态距离/排名图组；不要求其生成表达或表达富集图。真实扰动验证图单列，有匹配实测数据时才生成。
+
+每张图配套数值表，在 `figures/figure_manifest.csv` 记录已生成、跳过或绘制失败及原因。图形内容、适用条件、统计口径和展示检查均按参考文档执行；用户明确要求精简时缩减图组。
+
 仅使用实际存在且量纲可比的结果：
 
 - 逐基因结果：全量 CSV、Top 基因图、热图、散点图和适用的 GO/KEGG/Reactome 富集
@@ -94,13 +104,15 @@ results/<run_id>/
   provenance.json
   raw/
   tables/
-  figures/
+  figures/               # 图与 figure_manifest.csv
   validation.json
   errors.jsonl
   report.md
 ```
 
 `report.md` 只写：运行任务、输入和后端、完成条件、结果文件、未覆盖项、失败原因、质量检查和“未独立验证”标记。不要自动生成疾病机制、临床疗效、因果关系或实验优先级结论。
+
+报告按研究问题组织结果图，逐图说明展示变量、主要数值现象和来源表，列出未生成的默认图及原因。缺少可选图所需的数据不改变已成功预测的状态。
 
 ## 结果状态
 
@@ -122,7 +134,7 @@ results/<run_id>/
 - `references/input-contracts.md`：输入字段和缺口处理
 - `references/model-capabilities.md`：后端能力、限制和路由
 - `references/backend-environments.md`：各后端的解释器、权重、先验和已知安装障碍
-- `references/downstream-results.md`：三类任务的结果表、图和下游计算
+- `references/downstream-results.md`：出图时必读；三类任务的默认图组、条件扩展图、源数据和展示验收
 - `references/execution-playbook.md`：四阶段执行、结果目录、错误处理和交付格式
 
 若用户要求创建、安装或分发 skill，先按 skill 安全审计流程检查所有文件，再运行官方初始化/校验/打包脚本。
