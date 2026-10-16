@@ -13,9 +13,13 @@ import matplotlib.pyplot as plt
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
+import argparse
 ROOT = Path(__file__).resolve().parent
-TAB = ROOT / 'results/gse198291_celloracle_ko_oe/tables'
-FIG = ROOT / 'results/gse198291_celloracle_ko_oe/figures'
+parser = argparse.ArgumentParser()
+parser.add_argument('--run-dir', type=Path, required=True, help='explicit KO/OE run directory')
+args = parser.parse_args()
+TAB = args.run_dir / 'tables'
+FIG = args.run_dir / 'figures' / 'redrawn'
 FIG.mkdir(parents=True, exist_ok=True)
 
 

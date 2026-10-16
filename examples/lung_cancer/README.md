@@ -2,7 +2,7 @@
 
 这是一轮完整的端到端测试，覆盖 AIVC-skill 的三条路线。数据全部来自 GEO，癌种为肺癌。测试机器为 32G 内存 / 8G 显存，三个分支都没有用满显存。
 
-测试结果与踩坑记录见 [`reports/reproduction-report.md`](reports/reproduction-report.md)。
+历史结果及勘误见 [`reports/reproduction-report.md`](reports/reproduction-report.md)。文中数字对应修复前的运行，修复后脚本的验收状态另行记录。
 
 ## 数据来源
 
@@ -51,7 +51,9 @@ python run_unipert_g2cp.py
 python compare_backends.py
 ```
 
-脚本里的后端工作区路径（PRnet、chemCPA、UniPert-G2CP）是绝对路径，换机器时按需修改。
+脚本里的后端工作区路径（PRnet、chemCPA、UniPert-G2CP）是绝对路径，换机器时按需修改。KO/OE 与新药筛运行目录带时间后缀，避免覆盖历史结果。缺失模型输入基因时停止依赖该矩阵的推理，不补零；缺失疾病方向按共同有效基因计算。
+
+药筛新运行保存完整预测包与条件索引。跨平台原始负余弦评分仍需核对尺度依据；缺少适用依据时交付预测，登记评分跳过原因。
 
 ## 参考耗时
 
@@ -69,6 +71,6 @@ python compare_backends.py
 
 - `results/geo_gse81089/`：全基因差异表、978 landmark 基因方向向量、火山图
 - `results/geo_gse198291/`：QC 后的 AnnData、样本元数据
-- `results/gse198291_celloracle_ko_oe/`：每个条件的 `delta_X` 全量矩阵、embedding 位移表（含随机化 GRN 对照）、逐基因效应表、向量场图和 Top 基因条形图
+- `results/gse198291_celloracle_ko_oe/`：每个条件的 `delta_X` 全量矩阵、embedding 位移表（含随机化表达变化的投影对照）、逐基因效应表、向量场图和 Top 基因条形图
 - `results/a549_prnet_screen/`：2367 条条件表、458 行药物排名表、预测与实测一致性散点图
 - `drug_screen/results/`：三个后端各自的排名与图，以及 `comparison/` 下的横向对比

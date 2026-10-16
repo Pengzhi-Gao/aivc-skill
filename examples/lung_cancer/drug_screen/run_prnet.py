@@ -4,7 +4,7 @@
 输出：每个 (药物, 剂量) 的预测处理后表达与 LUAD 疾病方向逆转分数
 
 PRnet 的预测是「对照表达 + 药物 FCFP4 指纹 × log10(剂量+1) → 处理后表达」。
-对照表达由模型外部提供，所以用户的单细胞矩阵可以直接当基线。
+接口可接外部基线，但当前 LINCS 权重对患者单细胞输入属于 OOD 探索，需核对预处理与完整基因空间。
 
 不走 PRnetTrainer.test()：它的 Dataset.__getitem__ 用 list.index() 找配对对照，
 条件数一多就是 O(n²)。这里直接构建模型输入做批量前向。
@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RunDir, load_baseline, load_disease_direction,  # noqa: E402
-                    reversal_scores, degeneracy_check, sha16, CONDITIONS, LIBRARY)
+                    reversal_scores, degeneracy_check, top_response_table, sha16, CONDITIONS, LIBRARY)
 
 PRNET = Path(r'D:/WorkBuddy/模型论文复现/PRnet/PRnet-repro')
 CHECKPOINT = PRNET / 'checkpoint' / 'lincs_best_epoch_all.pt'
@@ -35,6 +35,7 @@ SEED = 2026
 run = RunDir('fda_prnet')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 rng = np.random.default_rng(SEED)
+torch.manual_seed(SEED)
 sys.path.insert(0, str(PRNET))
 
 lib = pd.read_csv(LIBRARY)
@@ -121,8 +122,13 @@ with torch.no_grad():
             print(f'  [predict] {end}/{len(cond)}')
 
 resp = preds - base_mean[None, :]
-cos, corr, reversal = reversal_scores(resp, disease)
-deg = degeneracy_check(resp, reversal)
+condition_meta = cond.copy()
+condition_meta = run.save_predictions(condition_meta, gene_space, preds, base_mean, resp)
+pd.DataFrame({'gene': gene_space, 'disease_effect': disease,
+              'used_for_scoring': np.isfinite(disease)}).to_csv(
+    run.tables / 'disease_gene_mask.csv', index=False)
+cos, corr, reversal = run.score_response(resp, disease, 'PRnet')
+deg = run.condition_quality(condition_meta, resp, reversal)
 print(f'[degeneracy] {deg}')
 
 res = cond.copy()
@@ -130,9 +136,12 @@ res['pred_response_l2'] = np.linalg.norm(resp, axis=1)
 res['cos_pred_vs_disease'] = cos
 res['corr_pred_vs_disease'] = corr
 res['reversal_score'] = reversal
+res.insert(0, 'condition_id', condition_meta['condition_id'].to_numpy())
+res['prediction_status'] = np.where(np.isfinite(resp).all(axis=1), 'result_available', 'failed')
+res['ranking_status'] = deg['ranking_status']
 res.to_csv(run.tables / 'conditions.csv', index=False)
 
-drug = res.groupby('drug').agg(
+drug = res.loc[np.isfinite(res['reversal_score']) & (res['prediction_status'] == 'result_available')].groupby('drug').agg(
     smiles=('smiles', 'first'),
     n_conditions=('dose_uM', 'size'),
     reversal_score_mean=('reversal_score', 'mean'),
@@ -140,45 +149,46 @@ drug = res.groupby('drug').agg(
     cos_mean=('cos_pred_vs_disease', 'mean'),
     pred_response_absmean=('pred_response_l2', 'mean'),
 ).reset_index().sort_values('reversal_score_mean', ascending=False).reset_index(drop=True)
-drug.insert(0, 'rank', np.arange(1, len(drug) + 1))
+drug.insert(0, 'rank', np.arange(1, len(drug) + 1) if deg['ranking_status'] == 'available'
+            else pd.array([pd.NA] * len(drug), dtype='Int64'))
+drug['ranking_status'] = deg['ranking_status']
 drug = drug.merge(lib[['drug', 'mechanism', 'target']], on='drug', how='left')
 drug.to_csv(run.tables / 'drug_ranking.csv', index=False)
 
-top = drug['drug'].head(20).tolist()
-sel = res['drug'].isin(top).to_numpy()
-pg = pd.DataFrame(resp[sel], columns=gene_space)
-pg.insert(0, 'drug', res.loc[sel, 'drug'].to_numpy())
-pg.insert(1, 'dose_uM', res.loc[sel, 'dose_uM'].to_numpy())
+pg = top_response_table(res, resp, gene_space, drug['drug'].tolist())
 pg.to_csv(run.tables / 'top20_drug_per_gene_predicted_response.csv', index=False)
 
-fig, ax = plt.subplots(figsize=(7.2, 5.6), dpi=140)
-t = drug.head(20).iloc[::-1]
-ax.barh(t['drug'], t['reversal_score_mean'], color='#3f6f9f')
-ax.axvline(0, color='#444', lw=.8)
-ax.set(xlabel='Reversal score  (-cos(predicted response, LUAD direction))',
-       title='PRnet: top 20 FDA drugs by LUAD-signature reversal')
-fig.tight_layout()
-fig.savefig(run.figures / 'drug_reversal_ranking.png')
-plt.close(fig)
+if np.isfinite(reversal).any():
+    fig, ax = plt.subplots(figsize=(7.2, 5.6), dpi=140)
+    t = drug.head(20).iloc[::-1]
+    ax.barh(t['drug'], t['reversal_score_mean'], color='#3f6f9f')
+    ax.axvline(0, color='#444', lw=.8)
+    ax.set(xlabel='Reversal score  (-cos(predicted response, LUAD direction))',
+           title='PRnet: top 20 FDA drugs by LUAD-signature reversal')
+    if deg['ranking_status'] != 'available':
+        ax.set_title('Diagnostic only: ranking unresolved / unavailable')
+    fig.tight_layout()
+    fig.savefig(run.figures / 'drug_reversal_ranking.png')
+    plt.close(fig)
 
-fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
-ax.hist(res['reversal_score'].dropna(), bins=60, color='#6b8f71')
-ax.axvline(0, color='#444', lw=.8)
-ax.set(xlabel='Reversal score', ylabel='conditions',
-       title=f'PRnet: reversal score distribution ({len(res)} conditions)')
-fig.tight_layout()
-fig.savefig(run.figures / 'reversal_distribution.png')
-plt.close(fig)
+    fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
+    ax.hist(res['reversal_score'].dropna(), bins=60, color='#6b8f71')
+    ax.axvline(0, color='#444', lw=.8)
+    ax.set(xlabel='Reversal score', ylabel='conditions',
+           title=f'PRnet: reversal score distribution ({len(res)} conditions)')
+    fig.tight_layout()
+    fig.savefig(run.figures / 'reversal_distribution.png')
+    plt.close(fig)
 
-fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
-for d, grp in res.groupby('dose_uM'):
-    ax.hist(grp['reversal_score'].dropna(), bins=50, alpha=.5, label=f'{d} µM')
-ax.axvline(0, color='#444', lw=.8)
-ax.legend()
-ax.set(xlabel='Reversal score', ylabel='conditions', title='PRnet: reversal score by dose')
-fig.tight_layout()
-fig.savefig(run.figures / 'reversal_by_dose.png')
-plt.close(fig)
+    fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
+    for d, grp in res.groupby('dose_uM'):
+        ax.hist(grp['reversal_score'].dropna(), bins=50, alpha=.5, label=f'{d} µM')
+    ax.axvline(0, color='#444', lw=.8)
+    ax.legend()
+    ax.set(xlabel='Reversal score', ylabel='conditions', title='PRnet: reversal score by dose')
+    fig.tight_layout()
+    fig.savefig(run.figures / 'reversal_by_dose.png')
+    plt.close(fig)
 
 validation = {
     'backend': 'PRnet',
@@ -203,7 +213,9 @@ validation = {
                              float(res['reversal_score'].max())],
     'degeneracy_check': deg,
     'independent_validation': 'none',
-    'status': 'failed' if deg['degenerate'] else 'result_available',
+    'status': deg['prediction_status'],
+    'ranking_status': deg['ranking_status'],
+    'validation_status': 'unvalidated',
 }
 manifest = {
     'task': 'drug',

@@ -1,6 +1,6 @@
 # 常见问题与踩坑记录
 
-这些是实测踩出来的，不是推测。每条都注明了现象、原因和处理方式。
+本页汇总本地实测中的现象、已定位原因和处理方式。
 
 ## 安装
 
@@ -14,21 +14,21 @@
 
 不阻断。前者是 `test_R_libraries_installation()` 找不到 R，本流程不用 R；后者只是版本提示。
 
-### 不要用主环境跑 CellOracle
+### CellOracle 使用隔离环境
 
 `celloracle 0.20.0` 锁定 `numpy==1.26.4` 和 `pandas<=1.5.3`，和带新版 scanpy 的主环境冲突。两个解释器分开装，靠 `manifest` 记录各自路径。
 
 ## 输入
 
-### PRnet 的输入不是任意表达矩阵
+### PRnet 的输入契约
 
-PRnet 的输入是模型自带的 LINCS AnnData（978 个 landmark 基因），`obs` 里必须有 `SMILES`、`dose`、`cov_drug_name`、`paired_control_index`。想筛某个细胞背景，做法是**从这份矩阵里按 `cell_type` 取子集**，不是把新数据喂进去。
+PRnet 的 LINCS 适配器使用自带 AnnData（978 landmark 基因），需要 `SMILES`、`dose`、`cov_drug_name`、`paired_control_index`，按 `cell_type` 取子集。模型前向接口也能接外部基线，适用性由预处理、权重与训练域共同决定。
 
 取子集时必须连同 `paired_control_index` 指向的对照一起保留，否则数据集构建直接报错。A549（人肺腺癌）有 4060 个 profile、458 种药物。
 
 ### chemCPA 查不到药物表征会静默填零向量
 
-chemCPA 按 SMILES 从 parquet 查药物表征，查不到的不报错，直接填零向量，等于判定该药无效果。2333 个 FDA 药物里训练表征只覆盖 768 个，剩下 1565 个必须显式补，不能默认"跑完就有结果"。
+chemCPA 按 SMILES 从 parquet 查药物表征，查不到时会静默填零向量，适配器需先检查覆盖。2333 个 FDA 药物中，训练表征覆盖 768 个，剩余 1565 个需按兼容流程补充表征或标为无预测。
 
 补表征的做法是照它的生成流程重算：descriptastorus 的 RDKit2D 描述符 → NaN/Inf 置 0 → 丢低方差列 → 用训练集统计量做 z 标准化。标准化用的 mean/std 没存在 parquet 里，要用训练集 SMILES 重算原始描述符反解，再拿 parquet 自身校验。实测 194 列里 180 列逐值一致。
 
@@ -38,43 +38,38 @@ chemCPA 按 SMILES 从 parquet 查药物表征，查不到的不报错，直接�
 
 ## 结果
 
-### CellOracle 没有"未扰动向量场"
+### CellOracle 的空扰动与随机化对照
 
-`simulate_shift` 传播的是"输入 − 实测"这个差值。扰动条件为空时差值恒为 0，位移自然也是 0，所以**不能靠跑一次空扰动来拿基线**。
+`simulate_shift` 传播的是"输入 − 实测"这个差值。扰动条件为空时差值恒为 0，位移也是 0。扰动位移使用下述随机化投影作技术对照。
 
-正确做法是用 `estimate_transition_prob(calculate_randomized=True)` 产出的 `delta_embedding_random` 作随机化 GRN 对照，报告"扰动位移 − 随机对照位移"。实测扰动特异位移 0.49–0.70，随机对照 0.28–0.30，两者差得开才说明信号不是网络结构本身带来的。
+`estimate_transition_prob(calculate_randomized=True)` 会打乱 `delta_X` 并随机翻转符号，计算随机化表达变化的投影对照 `delta_embedding_random`，GRN 保持固定。原始与对照并排展示，两者向量差长度按描述量解读。
 
 ### 药筛排名看起来有数，实际不随药物变化
 
-把用户自己的样本当基线喂给在细胞系上训练过的模型，很容易得到这种结果。模型输出被一个与药物无关的共同成分主导，药物那一侧被淹没。
+历史外部基线测试中，模型输出由共同成分主导，药物间响应差异较小。
 
-交付前必须过退化检查，两个指标：
+按 `../references/downstream-results.md` 分开检查预测有限性、逐基因响应范围和评分区分度。NaN/Inf 按条件失败；评分相同或余弦接近 1 不足以判预测失败。响应同方向但幅度不同可以是有效输出。评分无法区分时保留预测，将排名标 `unresolved`；数值容差用于分辨数值差异，生物学显著性另需适用检验。
 
-- `score_spread_across_conditions`：分数在条件间的极差
-- `median_pairwise_response_correlation`：不同条件响应向量两两相关的中位数
-
-参考量级：正常结果约极差 0.31–0.36、相关中位数 0.04；退化结果极差 < 0.01、相关中位数 > 0.999。判退化时状态标 `failed`，排名表只留作排查。
-
-实测：同一批 FDA 药物库上，chemCPA 极差 3.4e-06、相关中位数 1.00000；PRnet 0.0084、0.99994；UniPert-G2CP 0.307、0.958。前两个都退化。
+实测：同一批 FDA 药物库上，chemCPA 极差 3.4e-06、相关中位数 1.00000；PRnet 0.0084、0.99994；UniPert-G2CP 0.307、0.958。这些历史数值使用旧版判据，当前状态需分别核对预测、响应和排名。
 
 ### chemCPA 药物效应接近 0
 
 除了"基线在训练域之外"，chemCPA 这个权重本身还有问题：剂量响应模块是带 BatchNorm 的 MLP，输出经 sigmoid 后只有 5e-4 量级，而 `combo_embedding = transformed × sigmoid`，药物对隐变量的贡献被压到 0.01 左右。
 
-用模型自带的 A549 对照细胞、走官方 `chemCPA.train.compute_prediction` 原样复算，5 个不同药物的响应两两相关 1.000000。所以不是调用姿势的问题。
+用模型自带的 A549 对照细胞、走官方 `chemCPA.train.compute_prediction` 原样复算，5 个不同药物的响应两两相关 1.000000。该结果复现了当前环境与权重下的低响应区分度。
 
 ### 单细胞矩阵投到 landmark 基因空间会掉基因
 
-chemCPA 是 977 个 landmark 基因，PRnet 和 UniPert-G2CP 是 978 个。单细胞矩阵投过去覆盖率约 96%，未覆盖的基因置 0，数量要写进运行记录。
+chemCPA 是 977 个 landmark 基因，PRnet 和 UniPert-G2CP 是 978 个。单细胞矩阵投过去覆盖率约 96%，缺失基因与实测零值分开。当前示例没有经过验证的插补流程，缺模型必需基因时停止该路推理；评分使用共同有效基因并保存掩码。
 
-另外归一化口径要和训练数据一致：SciPlex 和 LINCS 都是先在全转录组做 `normalize_total` 再投到 landmark 基因，不要在子集上重新归一化。
+SciPlex 与 LINCS 各自按对应权重的训练预处理核对归一化口径。记录归一化所用基因范围、目标总量及 log 变换。
 
 ## 交付
 
-### 不要用零向量或库均值补缺失候选
+### 缺失候选的保存方式
 
-无覆盖的候选标 `no_prediction`，不补预测值。用零效应补齐会让排名看起来完整，实际上把"没跑"和"没效果"混在一起了。
+无覆盖候选标 `no_prediction`，预测值留缺失；有效预测中的零效应正常保留。
 
-### 结果有值不等于已验证
+### 运行与验证状态分别记录
 
-缺少独立实验或留出数据时标 `unvalidated`，保留原始结果但不写成已验证。药筛那类"预测响应 vs 实测响应"的相关系数是训练域内的内部一致性，不能当实验验证。
+缺少独立实验或留出数据时标 `unvalidated`，并保存原始模型结果。预测与实测相关系数需注明来源属于训练内比较、留出测试还是外部验证。

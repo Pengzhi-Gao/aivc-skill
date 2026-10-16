@@ -29,9 +29,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / 'drug_screen'))
+from common import RunDir, load_disease_direction, top_response_table
 PRNET = Path(r'D:/WorkBuddy/模型论文复现/PRnet/PRnet-repro')
-RUN_ID = 'a549_prnet_screen'
-OUT = ROOT / 'results' / RUN_ID
+run = RunDir('a549_prnet_screen', base_dir=ROOT)
+RUN_ID = run.run_id
+OUT = run.root
 RAW = OUT / 'raw'
 TAB = OUT / 'tables'
 FIG = OUT / 'figures'
@@ -111,6 +114,7 @@ meta['cov_drug_name'] = meta['cov_drug_name'].astype(str)
 meta = meta[meta['dose'].astype(float) != 0.0]
 meta = meta.reset_index(drop=True)
 assert len(meta) == len(cov), f'obs/cov length mismatch {len(meta)} vs {len(cov)}'
+assert np.array_equal(meta['cov_drug_name'].to_numpy(), cov), 'condition order mismatch; join by identity before scoring'
 cond['dose'] = meta['dose'].to_numpy(dtype=float)
 cond['pert_time'] = meta['pert_time'].to_numpy(dtype=float)
 cond['smiles'] = meta['SMILES'].to_numpy()
@@ -123,38 +127,19 @@ cond['pred_resp_absmean'] = np.abs(pred_resp).mean(axis=1)
 cond['obs_resp_absmean'] = np.abs(obs_resp).mean(axis=1)
 
 # --------------------------------------------------- 4. 疾病方向逆转评分
-sig = pd.read_csv(SIG_CSV, index_col=0)['tumor_minus_normal_log2']
-sig = sig.reindex(genes)
-disease = np.nan_to_num(sig.to_numpy(dtype=float))
-sig_used = ~np.isnan(sig.to_numpy(dtype=float)) & (sig.to_numpy(dtype=float) != 0.0)
-print(f'[signature] landmark genes used={int(sig_used.sum())}')
+disease, dis_missing = load_disease_direction(genes)
+condition_meta = run.save_predictions(cond, genes, y_pre, x_true, pred_resp)
+cond.insert(0, 'condition_id', condition_meta['condition_id'].to_numpy())
+cos_all, corr_all, reversal = run.score_response(pred_resp, disease, 'PRnet')
+deg = run.condition_quality(condition_meta, pred_resp, reversal)
+pd.DataFrame({'gene': genes, 'disease_effect': disease,
+              'used_for_scoring': np.isfinite(disease)}).to_csv(TAB / 'disease_gene_mask.csv', index=False)
 
 
-def score(vec, space):
-    v = vec[space]
-    d = disease[space]
-    nv, nd = np.linalg.norm(v), np.linalg.norm(d)
-    if nv == 0 or nd == 0:
-        return np.nan, np.nan
-    cos = float(np.dot(v, d) / (nv * nd))
-    corr = float(np.corrcoef(v, d)[0, 1]) if v.std() > 0 else np.nan
-    return cos, corr
-
-
-all_space = np.ones(len(genes), dtype=bool)
-cos_all, corr_all = [], []
-cos_sig, corr_sig = [], []
-for i in range(pred_resp.shape[0]):
-    c1, r1 = score(pred_resp[i], all_space)
-    c2, r2 = score(pred_resp[i], sig_used)
-    cos_all.append(c1); corr_all.append(r1)
-    cos_sig.append(c2); corr_sig.append(r2)
-cond['cos_pred_vs_disease_all978'] = cos_all
-cond['corr_pred_vs_disease_all978'] = corr_all
-cond['cos_pred_vs_disease_siggenes'] = cos_sig
-cond['corr_pred_vs_disease_siggenes'] = corr_sig
-# 逆转分数 = 负余弦，越大说明药把表达推得越远离疾病方向
-cond['reversal_score'] = -cond['cos_pred_vs_disease_siggenes']
+cond['cos_pred_vs_disease_common_genes'] = cos_all
+cond['corr_pred_vs_disease_common_genes'] = corr_all
+cond['reversal_score'] = reversal
+cond['ranking_status'] = deg['ranking_status']
 
 # 内部一致性：预测响应与实测响应在同一基因空间上的相关
 agree = []
@@ -169,7 +154,7 @@ cond['pred_obs_response_corr'] = agree
 cond.to_csv(TAB / 'a549_conditions.csv', index=False)
 
 # --------------------------------------------------------- 5. 药物层面汇总
-g = cond.groupby('drug')
+g = cond.loc[np.isfinite(cond['reversal_score'])].groupby('drug')
 drug = pd.DataFrame({
     'n_conditions': g.size(),
     'n_doses': g['dose'].nunique(),
@@ -177,12 +162,14 @@ drug = pd.DataFrame({
     'dose_max': g['dose'].max(),
     'reversal_score_mean': g['reversal_score'].mean(),
     'reversal_score_max': g['reversal_score'].max(),
-    'cos_pred_vs_disease_mean': g['cos_pred_vs_disease_siggenes'].mean(),
+    'cos_pred_vs_disease_mean': g['cos_pred_vs_disease_common_genes'].mean(),
     'pred_resp_absmean_mean': g['pred_resp_absmean'].mean(),
     'pred_obs_response_corr_mean': g['pred_obs_response_corr'].mean(),
 }).reset_index()
 drug = drug.sort_values('reversal_score_mean', ascending=False).reset_index(drop=True)
-drug.insert(0, 'rank', np.arange(1, len(drug) + 1))
+drug.insert(0, 'rank', np.arange(1, len(drug) + 1) if deg['ranking_status'] == 'available'
+            else pd.array([pd.NA] * len(drug), dtype='Int64'))
+drug['ranking_status'] = deg['ranking_status']
 drug.to_csv(TAB / 'a549_drug_ranking.csv', index=False)
 
 # 排名靠前药物的逐基因预测响应
@@ -202,6 +189,8 @@ ax.barh(top['drug'], top['reversal_score_mean'], color='#3f6f9f')
 ax.set(xlabel='Reversal score  (-cos(predicted response, LUAD direction))',
        title=f'PRnet / {CELL}: top 20 drugs by LUAD-signature reversal')
 ax.axvline(0, color='#444', lw=.8)
+if deg['ranking_status'] != 'available':
+    ax.set_title('Diagnostic only: ranking unresolved / unavailable')
 fig.tight_layout()
 fig.savefig(FIG / 'a549_drug_reversal_ranking.png')
 plt.close(fig)
@@ -247,18 +236,20 @@ validation = {
     'genes': int(len(genes)),
     'prediction_finite': finite,
     'prediction_row_std_mean': row_std,
-    'degenerate_output': bool(row_std < 1e-6),
+    'response_status': deg['response_status'],
     'internal_agreement': {
         'metric': 'per-condition Pearson corr between predicted and observed response',
         'mean': float(np.nanmean(cond['pred_obs_response_corr'])),
         'median': float(np.nanmedian(cond['pred_obs_response_corr'])),
-        'note': 'held-out LINCS profiles; internal consistency only, not experimental validation',
+        'note': 'LINCS profiles; training/test overlap not established by relabeling the inference split',
     },
-    'status': 'result_available',
+    'status': deg['prediction_status'],
+    'ranking_status': deg['ranking_status'],
+    'degeneracy_check': deg,
+    'validation_status': 'unvalidated',
     'independent_validation': 'none',
 }
-(OUT / 'validation.json').write_text(
-    json.dumps(validation, ensure_ascii=False, indent=2), encoding='utf-8')
+# Validation and provenance are written together by RunDir.finish below.
 
 manifest = {
     'run_id': RUN_ID,
@@ -281,13 +272,9 @@ manifest = {
     },
     'errors': len(errors),
 }
-(OUT / 'manifest.json').write_text(
-    json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+run.errors.extend(errors)
 
-with open(OUT / 'errors.jsonl', 'w', encoding='utf-8') as f:
-    for e in errors:
-        f.write(json.dumps(e, ensure_ascii=False) + '\n')
-
+run.finish(manifest, validation)
 print(json.dumps(validation, ensure_ascii=False, indent=2))
 print('\ntop 10 by reversal:')
 print(drug.head(10)[['rank', 'drug', 'n_conditions', 'reversal_score_mean',

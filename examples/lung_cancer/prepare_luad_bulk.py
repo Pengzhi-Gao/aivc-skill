@@ -50,14 +50,15 @@ n_genes_raw = x.shape[0]
 x = x.dropna(axis=0)
 dropped_na_genes = n_genes_raw - x.shape[0]
 
-# cufflinks 用 -1 表示该基因在该样本无法计算 FPKM，按未表达处理（置 0）
+# 无法计算的 FPKM 是缺失值，不是实测零；当前示例保守排除含缺失的基因
 neg_mask = x.to_numpy() < 0
 n_neg = int(neg_mask.sum())
 assert x.to_numpy()[neg_mask].min() == -1.0 if n_neg else True
-x = x.clip(lower=0.0)
-assert (x.to_numpy() >= 0).all(), 'negative FPKM value after clipping'
+n_negative_genes = int((x < 0).any(axis=1).sum())
+x = x.mask(x < 0).dropna(axis=0)
+assert (x.to_numpy() >= 0).all()
 print(f'[fpkm] genes {n_genes_raw} -> {x.shape[0]} (dropped {dropped_na_genes} with NaN), '
-      f'samples {x.shape[1]}, negative sentinels clipped to 0: {n_neg}')
+      f'samples {x.shape[1]}, negative sentinels treated as missing: {n_neg}')
 
 # ------------------------------------------------------- 2. 读样本分组标签
 with gzip.open(SERIES, 'rt') as f:
@@ -178,10 +179,9 @@ assert len(sig_out) > 0, 'no landmark gene mapped'
 sig_out['significant_fdr05'] = sig_out['fdr_bh'] < 0.05
 sig_out.to_csv(OUT / 'GSE81089_landmark978_signature.csv', index=False)
 
-# 与 PRnet 基因顺序严格对齐的方向向量（未覆盖的 landmark 记 0，并在 summary 中报告）
+# 与 PRnet 基因顺序严格对齐的方向向量；未覆盖保留 NA
 vec = sig_out.set_index('gene_symbol')['tumor_minus_normal_log2'].reindex(landmark)
 n_uncovered = int(vec.isna().sum())
-vec = vec.fillna(0.0)
 vec.rename('tumor_minus_normal_log2').to_frame().to_csv(
     OUT / 'disease_direction_vector_978.csv')
 
@@ -207,7 +207,8 @@ summary = {
                 'normal': int(groups.eq('normal').sum())},
     'genes_total': int(len(full)),
     'genes_dropped_all_nan': int(dropped_na_genes),
-    'negative_fpkm_sentinels_clipped_to_zero': int(n_neg),
+    'negative_fpkm_sentinels_missing': int(n_neg),
+    'genes_dropped_negative_sentinels': n_negative_genes,
     'landmark978_covered': int(len(sig_out)),
     'landmark978_not_covered': int(n_uncovered),
     'landmark978_coverage_fraction': round(len(sig_out) / 978, 4),

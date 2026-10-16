@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (RunDir, load_disease_direction, reversal_scores,  # noqa: E402
-                    degeneracy_check, sha16, LIBRARY)
+                    degeneracy_check, top_response_table, sha16, LIBRARY)
 
 G2CP_ROOT = Path(r'D:/WorkBuddy/Work_推送/2610/261003 UniPert-G2CP')
 UNIPERT_DIR = G2CP_ROOT / 'official_unipert'
@@ -93,8 +93,13 @@ preds = np.vstack([np.asarray(preds_dict[n]).reshape(-1) for n in names])
 resp = preds - ctrl_mean[None, :]
 
 disease, dis_missing = load_disease_direction(gene_space)
-cos, corr, reversal = reversal_scores(resp, disease)
-deg = degeneracy_check(resp, reversal)
+condition_meta = pd.DataFrame({'drug': names})
+condition_meta = run.save_predictions(condition_meta, gene_space, preds, ctrl_mean, resp)
+pd.DataFrame({'gene': gene_space, 'disease_effect': disease,
+              'used_for_scoring': np.isfinite(disease)}).to_csv(
+    run.tables / 'disease_gene_mask.csv', index=False)
+cos, corr, reversal = run.score_response(resp, disease, 'UniPert-G2CP')
+deg = run.condition_quality(condition_meta, resp, reversal)
 print(f'[degeneracy] {deg}')
 
 res = pd.DataFrame({
@@ -105,35 +110,41 @@ res = pd.DataFrame({
     'reversal_score': reversal,
 })
 res = res.merge(lib[['drug', 'smiles', 'mechanism', 'target']], on='drug', how='left')
+res.insert(0, 'condition_id', condition_meta['condition_id'].to_numpy())
+res['prediction_status'] = np.where(np.isfinite(resp).all(axis=1), 'result_available', 'failed')
+res['ranking_status'] = deg['ranking_status']
 res.to_csv(run.tables / 'conditions.csv', index=False)
 
-drug = res.sort_values('reversal_score', ascending=False).reset_index(drop=True)
-drug.insert(0, 'rank', np.arange(1, len(drug) + 1))
+drug = res.loc[np.isfinite(res['reversal_score']) & (res['prediction_status'] == 'result_available')].sort_values('reversal_score', ascending=False).reset_index(drop=True)
+drug.insert(0, 'rank', np.arange(1, len(drug) + 1) if deg['ranking_status'] == 'available'
+            else pd.array([pd.NA] * len(drug), dtype='Int64'))
+drug['ranking_status'] = deg['ranking_status']
 drug.to_csv(run.tables / 'drug_ranking.csv', index=False)
 
-sel = np.arange(min(20, len(names)))
-pg = pd.DataFrame(resp[sel], columns=gene_space)
-pg.insert(0, 'drug', [names[i] for i in sel])
+pg = top_response_table(res, resp, gene_space, drug['drug'].tolist())
 pg.to_csv(run.tables / 'top20_drug_per_gene_predicted_response.csv', index=False)
 
-fig, ax = plt.subplots(figsize=(7.2, 5.6), dpi=140)
-t = drug.head(20).iloc[::-1]
-ax.barh(t['drug'], t['reversal_score'], color='#3f6f9f')
-ax.axvline(0, color='#444', lw=.8)
-ax.set(xlabel='Reversal score  (-cos(predicted response, LUAD direction))',
-       title='UniPert-G2CP / LINCS-A549: top 20 FDA drugs by LUAD-signature reversal')
-fig.tight_layout()
-fig.savefig(run.figures / 'drug_reversal_ranking.png')
-plt.close(fig)
+if np.isfinite(reversal).any():
+    fig, ax = plt.subplots(figsize=(7.2, 5.6), dpi=140)
+    t = drug.head(20).iloc[::-1]
+    ax.barh(t['drug'], t['reversal_score'], color='#3f6f9f')
+    ax.axvline(0, color='#444', lw=.8)
+    ax.set(xlabel='Reversal score  (-cos(predicted response, LUAD direction))',
+           title='UniPert-G2CP / LINCS-A549: top 20 FDA drugs by LUAD-signature reversal')
+    if deg['ranking_status'] != 'available':
+        ax.set_title('Diagnostic only: ranking unresolved / unavailable')
+    fig.tight_layout()
+    fig.savefig(run.figures / 'drug_reversal_ranking.png')
+    plt.close(fig)
 
-fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
-ax.hist(res['reversal_score'].dropna(), bins=60, color='#6b8f71')
-ax.axvline(0, color='#444', lw=.8)
-ax.set(xlabel='Reversal score', ylabel='drugs',
-       title=f'UniPert-G2CP: reversal score distribution ({len(res)} drugs)')
-fig.tight_layout()
-fig.savefig(run.figures / 'reversal_distribution.png')
-plt.close(fig)
+    fig, ax = plt.subplots(figsize=(6.6, 5.2), dpi=140)
+    ax.hist(res['reversal_score'].dropna(), bins=60, color='#6b8f71')
+    ax.axvline(0, color='#444', lw=.8)
+    ax.set(xlabel='Reversal score', ylabel='drugs',
+           title=f'UniPert-G2CP: reversal score distribution ({len(res)} drugs)')
+    fig.tight_layout()
+    fig.savefig(run.figures / 'reversal_distribution.png')
+    plt.close(fig)
 
 validation = {
     'backend': 'UniPert-G2CP',
@@ -156,7 +167,9 @@ validation = {
     'limitation': ('new_predict 每次随机抽 300 个 LINCS-A549 对照细胞，没有随机种子接口；'
                    '本次运行用 np.random.seed 固定了抽样，但多次运行结果会有差异。'),
     'independent_validation': 'none',
-    'status': 'failed' if deg['degenerate'] else 'result_available',
+    'status': deg['prediction_status'],
+    'ranking_status': deg['ranking_status'],
+    'validation_status': 'unvalidated',
 }
 manifest = {
     'task': 'drug',

@@ -19,13 +19,13 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 rows, dists = [], {}
 for d in sorted(RES.iterdir()):
-    if not d.is_dir() or d.name == 'comparison':
+    if not d.is_dir() or not (d / 'validation.json').exists() or not (d / 'tables/conditions.csv').exists():
         continue
     v = json.loads((d / 'validation.json').read_text())
     dg = v.get('degeneracy_check', {})
     cond = pd.read_csv(d / 'tables' / 'conditions.csv')
     score_col = 'reversal_score'
-    dists[v.get('backend', d.name)] = cond[score_col].dropna().to_numpy()
+    dists[f'{v.get("backend", "unknown")} / {d.name}'] = cond[score_col].dropna().to_numpy()
     rows.append({
         'run': d.name,
         'backend': v.get('backend'),
@@ -34,9 +34,10 @@ for d in sorted(RES.iterdir()):
         'status': v.get('status'),
         'accepts_user_baseline': v.get('accepts_user_baseline', True),
         'accepts_dose': v.get('accepts_dose', True),
-        'score_spread': round(dg.get('score_spread_across_conditions', np.nan), 6),
-        'median_pairwise_response_corr': round(
-            dg.get('median_pairwise_response_correlation', np.nan), 5),
+        'score_spread': dg.get('score_spread_across_conditions'),
+        'median_pairwise_response_cosine': dg.get('median_pairwise_response_cosine'),
+        'legacy_metric_unverified': dg.get('median_pairwise_response_correlation'),
+        'ranking_status': v.get('ranking_status', 'legacy_not_reassessed'),
         'degenerate': dg.get('degenerate'),
     })
 
@@ -60,13 +61,9 @@ summary = {
     'library': 'FDA approved (Drug Repurposing Hub, clinical_phase == Launched)',
     'drugs': int(cmp_df['drugs_scored'].max()),
     'doses_uM': [0.1, 1.0, 10.0],
-    'usable_backends': cmp_df.loc[cmp_df['status'] == 'result_available', 'backend'].tolist(),
+    'rankable_runs': cmp_df.loc[cmp_df['ranking_status'] == 'available', 'run'].tolist(),
     'degenerate_backends': cmp_df.loc[cmp_df['degenerate'] == True, 'backend'].tolist(),
-    'conclusion': (
-        '只有 UniPert-G2CP 在本次输入下给出可区分的药物排名。chemCPA 与 PRnet 的响应'
-        '几乎不随药物变化：两者的响应向量两两相关中位数分别为 1.0000 和 0.9999，'
-        '而上一轮在 LINCS A549 自带对照上的 PRnet 结果是 0.042。'
-        '共同点是这两个后端都被喂了用户自己的单细胞矩阵当基线，落在训练域之外。'),
+    'note': '按各运行实际状态汇总；旧判据未自动复核。不同评分尺度/背景不能据分布高低比较模型优劣。',
 }
 (OUT / 'comparison_summary.json').write_text(
     json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')

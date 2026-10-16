@@ -19,7 +19,7 @@
 | `velocyto>=0.17` | 只有 sdist，且唯一的 Cython 模块 `speedboosted` 需要 C 编译器 |
 | `gimmemotifs<=0.17.2` | 只有 sdist，依赖链里的 `pysam` / `pybedtools` / `pybigwig` / `htseq` 在本机没有可用轮子 |
 
-conda-forge 与 bioconda 都没有 `velocyto` 的 win-64 构建，所以没有"直接下载预编译包"这条路。
+本次安装时，conda-forge 与 bioconda 均缺少 `velocyto` 的 win-64 构建，因此采用源码编译。
 
 ## 实际做法
 
@@ -81,11 +81,11 @@ CellOracle 实际使用子模块的版本，原文件保留在同目录 `__init_
 
 CellOracle 的 `celloracle.motif_analysis` 在 import 阶段需要 `gimmemotifs` 和
 `pybedtools`，但这条路径是"从基因组序列 + motif 库扫描构建 base GRN"。
-本流程直接加载 CellOracle 官方预构建的人类 promoter base GRN，**不走这条路径**。
+本流程直接加载 CellOracle 官方预构建的人类 promoter base GRN。
 
 因此 `site-packages/gimmemotifs/` 与 `site-packages/pybedtools/` 是占位模块：
 符号存在、import 可以通过，一旦真正被调用会抛 `NotImplementedError`。
-占位模块不参与任何计算，也不会静默返回结果。
+该环境支持预构建 GRN 分析；从序列扫描构建 GRN 需另行安装这两个依赖的完整实现。
 
 ## 已知非阻断告警
 
@@ -94,11 +94,11 @@ CellOracle 的 `celloracle.motif_analysis` 在 import 阶段需要 `gimmemotifs`
 - `which: no R in ...` — `test_R_libraries_installation()` 找不到 R，本流程不用 R
 - `1 package does not meet CellOracle requirement. Your jupyter version is not_found` — 仅提示，不影响计算路径
 
-## 结论
+## 环境构成
 
 - CellOracle 0.20.0 的**计算路径**（GRN 推断、信号传播模拟、embedding 位移）
-  用的是官方源码和官方预构建 base GRN，没有替换。
-- 被替换的只有三处，且都在这条路径之外：
+  使用官方源码和官方预构建 base GRN。
+- 本地环境适配包括三项：
   1. velocyto 的编译产物（用官方 pyx 重新生成 C 后用 zig 编译）；
   2. velocyto 的 `__init__` 导入范围（跳过需要 pysam 的计数模块）；
   3. gimmemotifs / pybedtools 两个未使用依赖的占位模块。

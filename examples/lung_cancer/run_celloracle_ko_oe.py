@@ -36,7 +36,7 @@ plt.rcParams['axes.unicode_minus'] = False
 import celloracle as co
 
 ROOT = Path(__file__).resolve().parent
-RUN_ID = 'gse198291_celloracle_ko_oe'
+RUN_ID = f'gse198291_celloracle_ko_oe_{datetime.now():%Y%m%dT%H%M%S%f}'
 OUT = ROOT / 'results' / RUN_ID
 RAW = OUT / 'raw'
 TAB = OUT / 'tables'
@@ -149,15 +149,19 @@ oracle.fit_GRN_for_simulation(alpha=10, GRN_unit='whole',
 # --------------------------------------------------------- 4. 基线与对照
 # CellOracle 的 simulate_shift 传播的是"扰动信号"：delta_input = 输入 - 实测，
 # 空扰动条件下 delta_input 恒为 0，因此不存在"未扰动向量场"。
-# 这里不做 WT 基线，改用 CellOracle 自带的随机化 GRN 对照
+# 这里用 CellOracle 自带的随机化表达变化投影对照（不是重建随机 GRN）
 # （estimate_transition_prob 的 calculate_randomized=True -> delta_embedding_random）。
 
 # 目标基因的 imputed 表达范围（OE 取值依据）
+# Save the full baseline and fitted network for downstream views.
+for unit, edges in links.filtered_links.items():
+    edges.assign(grn_unit=unit).to_csv(TAB / f'baseline_network_{unit}.csv', index=False)
 imputed = pd.DataFrame(
     np.asarray(oracle.adata.layers['imputed_count'].todense()
                if hasattr(oracle.adata.layers['imputed_count'], 'todense')
                else oracle.adata.layers['imputed_count']),
     index=oracle.adata.obs_names, columns=oracle.adata.var_names)
+imputed.to_csv(RAW / 'baseline_imputed_expression.csv.gz')
 range_rows = []
 for g in TARGETS:
     v = imputed[g].to_numpy()
@@ -197,7 +201,7 @@ for gene in TARGETS:
             shift_random = oracle.delta_embedding_random.copy()
             shift_mag = np.linalg.norm(shift, axis=1)
             random_mag = np.linalg.norm(shift_random, axis=1)
-            # 去掉随机化 GRN 对照的位移，剩下的才是扰动特异的位移
+            # 两种投影的向量差仅作描述；不能解释为去噪或扰动特异信号
             spec = shift - shift_random
             spec_mag = np.linalg.norm(spec, axis=1)
 
@@ -208,7 +212,7 @@ for gene in TARGETS:
                 'umap_y': np.asarray(oracle.embedding)[:, 1],
                 'embedding_shift_magnitude': shift_mag,
                 'random_shift_magnitude': random_mag,
-                'specific_shift_magnitude': spec_mag,
+                'vector_difference_magnitude': spec_mag,
                 'dx': shift[:, 0], 'dy': shift[:, 1],
                 'dx_random': shift_random[:, 0], 'dy_random': shift_random[:, 1],
             })
@@ -257,8 +261,10 @@ for gene in TARGETS:
 
             fig, ax = plt.subplots(figsize=(7, 4.4), dpi=140)
             top = gene_stat.head(15).iloc[::-1]
-            ax.barh(top['gene'], top['mean_abs_delta'], color='#3f6f9f')
-            ax.set(xlabel='|mean delta X| across cells (imputed expression units)',
+            ax.barh(top['gene'], top['mean_delta'],
+                    color=np.where(top['mean_delta'] >= 0, '#b94d48', '#3f6f9f'))
+            ax.axvline(0, color='#444', lw=.8)
+            ax.set(xlabel='Mean delta X (imputed expression units); selected by mean |delta X|',
                    title=f'{gene} {"KO" if mode == "ko" else "OE"}: top 15 affected genes')
             fig.tight_layout()
             fig.savefig(FIG / f'{tag}_top_genes.png')
@@ -271,14 +277,18 @@ for gene in TARGETS:
                 'embedding_shift_finite': bool(np.isfinite(shift).all()),
                 'embedding_shift_mean_magnitude': float(shift_mag.mean()),
                 'random_shift_mean_magnitude': float(random_mag.mean()),
-                'specific_shift_mean_magnitude': float(spec_mag.mean()),
+                'vector_difference_mean_magnitude': float(spec_mag.mean()),
                 'target_gene_mean_delta': float(delta_x[gene].mean()),
+                'target_cells_above_setting': int((imputed[gene] > value).sum()) if mode == 'oe' else 0,
+                'oe_semantics': 'fixed target value; cells above this value decrease' if mode == 'oe' else None,
                 'top_affected_genes': gene_stat.head(10)['gene'].tolist(),
-                'status': 'result_available',
+                'status': ('result_available' if np.isfinite(delta_x.to_numpy()).all()
+                           and np.isfinite(shift).all() and np.isfinite(shift_random).all()
+                           else 'failed'),
             }
             print(f'[{tag}] value={value:g} shift_mag_mean={shift_mag.mean():.4f} '
                   f'random_mag_mean={random_mag.mean():.4f} '
-                  f'specific_mag_mean={spec_mag.mean():.4f} '
+                  f'vector_difference_mag_mean={spec_mag.mean():.4f} '
                   f'target_delta={delta_x[gene].mean():.4f}')
         except Exception as e:
             log_err(tag, e)
